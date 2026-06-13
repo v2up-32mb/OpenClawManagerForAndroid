@@ -4,15 +4,15 @@ plugins {
 }
 
 android {
-    namespace = "com.singxie.openclawmanager"
+    namespace = "com.picoclaw.manager"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.singxie.openclawmanager"
+        applicationId = "com.picoclaw.manager"
         minSdk = 24
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0"
+        versionName = "0.1.0-pico"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -71,5 +71,4 @@ dependencies {
     implementation(libs.gson)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.core)
-    implementation(libs.bouncycastle.bcprov)
 }
