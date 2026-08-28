@@ -12,9 +12,9 @@ import java.util.concurrent.TimeUnit
  * picoclaw REST API 客户端。
  *
  * 用于访问 picoclaw Dashboard 的 HTTP API：
- * - 模型管理: /api/models/*
+ * - 模型管理: /api/models/...
  * - 状态监控: /api/gateway/status
- * - Skill 管理: /api/skills/*
+ * - Skill 管理: /api/skills/...
  * - 配置管理: /api/config
  *
  * 参考: https://github.com/sipeed/picoclaw
