@@ -102,6 +102,7 @@ fun StatusMonitorScreen(
                             is PicoConnectionState.Connected -> "已连接"
                             is PicoConnectionState.Disconnected -> "未连接"
                             is PicoConnectionState.Connecting -> "连接中…"
+                            is PicoConnectionState.Disconnecting -> "断开中…"
                             is PicoConnectionState.Error -> "错误: ${(connectionState as PicoConnectionState.Error).message}"
                         },
                         style = MaterialTheme.typography.bodyLarge,

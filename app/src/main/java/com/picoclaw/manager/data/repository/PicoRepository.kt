@@ -9,10 +9,12 @@ import com.picoclaw.manager.data.pico.PicoMessage
 import com.picoclaw.manager.data.pico.PicoMessageType
 import com.picoclaw.manager.data.pico.PicoSession
 import com.picoclaw.manager.data.remote.PicoApiClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,16 +30,25 @@ import java.util.UUID
  * - Chat 功能通过 WebSocket（PicoGatewayClient）与 pico 协议通信
  * - 模型/状态/Skill 管理通过 REST API（PicoApiClient）通信
  */
-class PicoRepository {
+class PicoRepository(
+    /** M1 修复：可选共享 OkHttpClient，避免每实例创建独立连接池。 */
+    private val sharedHttpClient: okhttp3.OkHttpClient? = null
+) {
 
     companion object {
         private const val TAG = "PicoRepository"
+        /** AI typing 超时时间（毫秒），防止 typing.start 后服务端不回 typing.stop（H3 修复）。 */
+        private const val AI_TYPING_TIMEOUT_MS = 120_000L
     }
 
     private val gson = Gson()
     private var wsClient: PicoGatewayClient? = null
     private var apiClient: PicoApiClient? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** H2 修复：单线程串行处理 WebSocket 消息，避免跨线程竞态。 */
+    private val wsDispatcher = Dispatchers.Default.limitedParallelism(1)
+    private val wsScope = CoroutineScope(SupervisorJob() + wsDispatcher)
 
     // ==================== 连接状态 ====================
 
@@ -103,6 +114,8 @@ class PicoRepository {
     val aiTyping: StateFlow<Boolean> = _aiTyping.asStateFlow()
 
     private var agentRunTimeoutJob: Job? = null
+    /** H3 修复：AI typing 超时保护，防止 typing.start 后服务端不回 typing.stop。 */
+    private var aiTypingTimeoutJob: Job? = null
 
     /** 上一轮回复的最后一条 message_id，用于判断流式更新结束状态。 */
     private var lastAssistantMessageId: String? = null
@@ -126,10 +139,10 @@ class PicoRepository {
         currentSessionId = sessionId ?: UUID.randomUUID().toString()
 
         // 初始化 API 客户端
-        apiClient = PicoApiClient(apiUrl, token)
+        apiClient = PicoApiClient(apiUrl, token, sharedHttpClient)
 
         // 初始化 WebSocket 客户端
-        wsClient = PicoGatewayClient(wsUrl, token, currentSessionId).apply {
+        wsClient = PicoGatewayClient(wsUrl, token, currentSessionId, sharedHttpClient).apply {
             setMessageListener { message -> handlePicoMessage(message) }
             setOnConnectFailedListener { msg ->
                 _errorMessage.value = msg
@@ -169,39 +182,62 @@ class PicoRepository {
         lastAssistantMessageId = null
     }
 
+    /**
+     * H1 修复：关闭 Repository，取消所有内部协程。
+     * 应在 MainViewModel.removeActiveProfile() / onCleared() 中调用。
+     */
+    fun close() {
+        disconnect()
+        wsScope.cancel()
+        scope.cancel()
+    }
+
     // ==================== 消息处理 ====================
 
     /**
      * 处理从 Pico 协议 WebSocket 收到的消息。
+     * H2 修复：所有消息处理在单线程 dispatcher 上串行执行，避免跨线程竞态。
      */
     private fun handlePicoMessage(message: PicoMessage) {
         val payload = message.payload ?: return
 
-        when (message.type) {
-            PicoMessageType.MESSAGE_CREATE -> {
-                handleMessageCreate(payload)
-            }
-            PicoMessageType.MESSAGE_UPDATE -> {
-                handleMessageUpdate(payload)
-            }
-            PicoMessageType.MESSAGE_DELETE -> {
-                handleMessageDelete(payload)
-            }
-            PicoMessageType.MEDIA_CREATE -> {
-                handleMessageCreate(payload)  // 同 message.create 处理
-            }
-            PicoMessageType.TYPING_START -> {
-                // AI 开始回复
-                _aiTyping.value = true
-            }
-            PicoMessageType.TYPING_STOP -> {
-                // AI 回复结束
-                _aiTyping.value = false
-            }
-            PicoMessageType.ERROR -> {
-                val errMsg = payload["message"]?.toString() ?: "服务器错误"
-                val code = payload["code"]?.toString()
-                Log.e(TAG, "Pico error: $code $errMsg")
+        // H2: 串行化消息处理，避免读-改-写竞态
+        wsScope.launch {
+            when (message.type) {
+                PicoMessageType.MESSAGE_CREATE -> {
+                    handleMessageCreate(payload)
+                }
+                PicoMessageType.MESSAGE_UPDATE -> {
+                    handleMessageUpdate(payload)
+                }
+                PicoMessageType.MESSAGE_DELETE -> {
+                    handleMessageDelete(payload)
+                }
+                PicoMessageType.MEDIA_CREATE -> {
+                    handleMessageCreate(payload)  // 同 message.create 处理
+                }
+                PicoMessageType.TYPING_START -> {
+                    // AI 开始回复
+                    _aiTyping.value = true
+                    // H3: 设置 typing 超时保护
+                    aiTypingTimeoutJob?.cancel()
+                    aiTypingTimeoutJob = wsScope.launch {
+                        delay(AI_TYPING_TIMEOUT_MS)
+                        _aiTyping.value = false
+                        Log.w(TAG, "AI typing timeout, force reset")
+                    }
+                }
+                PicoMessageType.TYPING_STOP -> {
+                    // AI 回复结束
+                    _aiTyping.value = false
+                    aiTypingTimeoutJob?.cancel()
+                    aiTypingTimeoutJob = null
+                }
+                PicoMessageType.ERROR -> {
+                    val errMsg = payload["message"]?.toString() ?: "服务器错误"
+                    val code = payload["code"]?.toString()
+                    Log.e(TAG, "Pico error: $code $errMsg")
+                }
             }
         }
     }
@@ -214,7 +250,8 @@ class PicoRepository {
         val content = extractDisplayText(payload["content"])
         val messageId = payload["message_id"]?.toString() ?: UUID.randomUUID().toString()
         val kind = payload["kind"]?.toString() ?: "normal"
-        val placeholder = payload["placeholder"] as? Boolean ?: false
+        // H5: 安全解析 Boolean，避免 as? 在非 Boolean 类型上返回 null
+        val placeholder = boolFromPayload(payload["placeholder"])
 
         // 去重
         if (messageId in seenMessageIds) return
@@ -356,35 +393,42 @@ class PicoRepository {
 
     /**
      * 刷新网关状态。
+     * H6 修复：不使用 runCatching（会吞 CancellationException），改为 try-catch 并重新抛出 CancellationException。
      */
     suspend fun refreshGatewayStatus() = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             apiClient?.getGatewayStatus()?.getOrNull()?.let {
                 _gatewayStatus.value = it
             }
-        }.onFailure { e ->
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             Log.w(TAG, "refreshGatewayStatus failed: ${e.message}")
         }
     }
 
     /**
      * 刷新版本信息。
+     * H6 修复：不使用 runCatching。
      */
     suspend fun refreshVersion() = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             apiClient?.getVersion()?.getOrNull()?.let {
                 _systemVersion.value = it
             }
-        }.onFailure { e ->
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             Log.w(TAG, "refreshVersion failed: ${e.message}")
         }
     }
 
     /**
      * 刷新模型列表。
+     * H6 修复：不使用 runCatching。
      */
     suspend fun refreshModels() = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             apiClient?.getModels()?.getOrNull()?.let { modelList ->
                 _models.value = modelList
                 // 尝试从 status 中获取默认模型
@@ -395,20 +439,25 @@ class PicoRepository {
                     _defaultModel.value = defaultModelName
                 }
             }
-        }.onFailure { e ->
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             Log.w(TAG, "refreshModels failed: ${e.message}")
         }
     }
 
     /**
      * 刷新 Skill 列表。
+     * H6 修复：不使用 runCatching。
      */
     suspend fun refreshSkills() = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             apiClient?.getSkills()?.getOrNull()?.let {
                 _skills.value = it
             }
-        }.onFailure { e ->
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             Log.w(TAG, "refreshSkills failed: ${e.message}")
         }
     }
@@ -498,8 +547,23 @@ class PicoRepository {
     private fun clearAgentRunInProgress() {
         agentRunTimeoutJob?.cancel()
         agentRunTimeoutJob = null
+        aiTypingTimeoutJob?.cancel()
+        aiTypingTimeoutJob = null
         _agentRunInProgress.value = false
         _aiTyping.value = false
+    }
+
+    /**
+     * H5 修复：安全解析 Boolean payload 值。
+     * Gson 解析 JSON boolean 为 Boolean，但数字/字符串场景需要兼容。
+     */
+    private fun boolFromPayload(value: Any?): Boolean {
+        return when (value) {
+            is Boolean -> value
+            is String -> value.equals("true", ignoreCase = true)
+            is Number -> value.toInt() != 0
+            else -> false
+        }
     }
 
     /**

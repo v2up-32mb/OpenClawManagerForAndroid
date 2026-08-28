@@ -16,6 +16,7 @@ import okio.ByteString
 import java.net.URI
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Pico 协议 WebSocket 客户端。
@@ -30,10 +31,11 @@ import java.util.concurrent.TimeUnit
 class PicoGatewayClient(
     private val gatewayUrl: String,
     private val authToken: String? = null,
-    private val sessionId: String? = null
+    private val sessionId: String? = null,
+    sharedClient: OkHttpClient? = null
 ) {
     private val gson = Gson()
-    private val client = OkHttpClient.Builder()
+    private val client = sharedClient ?: OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.SECONDS)
         .writeTimeout(10, TimeUnit.SECONDS)
@@ -41,6 +43,9 @@ class PicoGatewayClient(
         .build()
 
     private var webSocket: WebSocket? = null
+
+    /** 连接代次，用于防止旧回调污染新连接状态（M4 修复）。 */
+    private val connectGeneration = AtomicInteger(0)
 
     private val _connectionState = MutableStateFlow<PicoConnectionState>(PicoConnectionState.Disconnected)
     val connectionState: StateFlow<PicoConnectionState> = _connectionState.asStateFlow()
@@ -61,6 +66,8 @@ class PicoGatewayClient(
 
     fun connect() {
         if (_connectionState.value is PicoConnectionState.Connecting) return
+        // M4: 递增代次，旧连接的回调将忽略
+        val gen = connectGeneration.incrementAndGet()
         webSocket?.close(1000, null)
         _connectionState.value = PicoConnectionState.Connecting
 
@@ -83,28 +90,36 @@ class PicoGatewayClient(
 
         webSocket = client.newWebSocket(requestBuilder.build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (gen != connectGeneration.get()) return  // M4: 旧连接回调，忽略
                 Log.d(TAG, "WebSocket connected to $gatewayUrl")
                 _connectionState.value = PicoConnectionState.Connected
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (gen != connectGeneration.get()) return  // M4: 旧连接回调，忽略
                 handleMessage(text)
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                if (gen != connectGeneration.get()) return
                 onMessage(webSocket, bytes.utf8())
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                if (gen != connectGeneration.get()) return
                 Log.d(TAG, "WebSocket closing: $code $reason")
+                // M3: 立即进入 Disconnecting 状态，避免用户在关闭窗口期发送消息
+                _connectionState.value = PicoConnectionState.Disconnecting
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (gen != connectGeneration.get()) return
                 Log.d(TAG, "WebSocket closed: $code $reason")
                 _connectionState.value = PicoConnectionState.Disconnected
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (gen != connectGeneration.get()) return
                 Log.e(TAG, "WebSocket failure: ${t.message}", t)
                 _connectionState.value = PicoConnectionState.Error(t.message ?: "连接失败")
                 onConnectFailedListener?.invoke(t.message ?: "连接失败")
@@ -113,8 +128,12 @@ class PicoGatewayClient(
     }
 
     fun disconnect() {
+        connectGeneration.incrementAndGet()  // M4: 使旧回调失效
         webSocket?.close(1000, "User disconnect")
         webSocket = null
+        // M2: 清理 listener 引用，防止旧 Repository 被回调写入
+        messageListener = null
+        onConnectFailedListener = null
         _connectionState.value = PicoConnectionState.Disconnected
     }
 

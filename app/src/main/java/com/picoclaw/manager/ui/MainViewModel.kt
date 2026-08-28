@@ -19,7 +19,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 private const val PREFS_PICO = "pico_connection"
 private const val KEY_PROFILES_JSON = "pico_profiles_json"
@@ -38,11 +40,26 @@ class MainViewModel(
 
     private val repositories = ConcurrentHashMap<String, PicoRepository>()
 
+    /** M1 修复：共享 OkHttpClient，避免每个 Repository 实例各建一个连接池。 */
+    private val sharedOkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .pingInterval(30, TimeUnit.SECONDS)
+        .build()
+
     private fun repoFor(profileId: String): PicoRepository {
-        return repositories.getOrPut(profileId) { PicoRepository() }
+        return repositories.getOrPut(profileId) { PicoRepository(sharedOkHttpClient) }
     }
 
-    private val _activeRepo = MutableStateFlow<PicoRepository>(PicoRepository())
+    /**
+     * H4 修复：从 map 中移除并关闭 Repository，释放协程和资源。
+     */
+    private fun closeRepo(profileId: String) {
+        repositories.remove(profileId)?.close()
+    }
+
+    private val _activeRepo = MutableStateFlow<PicoRepository>(PicoRepository(sharedOkHttpClient))
 
     // ==================== 通过 flatMapLatest 映射的活动仓库状态 ====================
 
@@ -253,8 +270,8 @@ class MainViewModel(
         val activeId = _activeProfileId.value
         val idx = list.indexOfFirst { it.id == activeId }
         if (idx < 0) return false
-        repositories[activeId]?.disconnect()
-        repositories.remove(activeId)
+        // H4 修复：使用 closeRepo 关闭并释放资源
+        closeRepo(activeId)
         val newList = list.filterNot { it.id == activeId }
         _profiles.value = newList
         val newIdx = (idx - 1).coerceAtLeast(0).coerceAtMost(newList.lastIndex)
@@ -368,7 +385,8 @@ class MainViewModel(
     fun clearChatSendError() = _activeRepo.value.clearChatSendError()
 
     override fun onCleared() {
-        repositories.values.forEach { it.disconnect() }
+        // H1/H4 修复：关闭所有 Repository，释放协程和资源
+        repositories.keys.toList().forEach { closeRepo(it) }
         repositories.clear()
     }
 

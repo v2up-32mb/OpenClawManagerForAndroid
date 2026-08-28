@@ -160,6 +160,8 @@ sealed class PicoConnectionState {
     object Disconnected : PicoConnectionState()
     object Connecting : PicoConnectionState()
     object Connected : PicoConnectionState()
+    /** 服务端正在关闭连接，UI 应禁止发送消息（M3 修复）。 */
+    object Disconnecting : PicoConnectionState()
     data class Error(val message: String) : PicoConnectionState()
 }
 

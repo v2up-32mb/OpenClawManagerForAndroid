@@ -19,12 +19,16 @@ import java.util.concurrent.TimeUnit
  *
  * 参考: https://github.com/sipeed/picoclaw
  */
-class PicoApiClient(private val baseUrl: String, private val token: String? = null) {
+class PicoApiClient(
+    private val baseUrl: String,
+    private val token: String? = null,
+    sharedClient: okhttp3.OkHttpClient? = null
+) {
 
     private val gson = Gson()
     private val jsonMediaType = "application/json".toMediaType()
 
-    private val client = OkHttpClient.Builder()
+    private val client = sharedClient ?: OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(15, TimeUnit.SECONDS)
