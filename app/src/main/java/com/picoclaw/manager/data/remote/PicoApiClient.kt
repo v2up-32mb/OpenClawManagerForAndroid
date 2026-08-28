@@ -161,7 +161,7 @@ class PicoApiClient(private val baseUrl: String, private val token: String? = nu
      * POST /api/models/default
      */
     suspend fun setDefaultModel(modelRef: String): Result<Unit> {
-        return post("/api/models/default", mapOf("model" to modelRef)).map { }
+        return post("/api/models/default", mapOf("model_name" to modelRef)).map { }
     }
 
     /**

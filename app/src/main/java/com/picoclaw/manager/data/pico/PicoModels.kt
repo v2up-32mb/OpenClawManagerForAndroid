@@ -96,8 +96,21 @@ data class PicoErrorPayload(
  * 工具调用信息。
  */
 data class ToolCall(
-    val name: String,
-    val arguments: String  // JSON 字符串
+    val id: String? = null,
+    val type: String? = null,
+    val function: ToolCallFunction? = null,
+    @com.google.gson.annotations.SerializedName("extra_content")
+    val extraContent: ToolCallExtraContent? = null
+)
+
+data class ToolCallFunction(
+    val name: String? = null,
+    val arguments: String? = null
+)
+
+data class ToolCallExtraContent(
+    @com.google.gson.annotations.SerializedName("tool_feedback_explanation")
+    val toolFeedbackExplanation: String? = null
 )
 
 /**
