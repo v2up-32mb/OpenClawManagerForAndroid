@@ -195,6 +195,24 @@ class PicoGatewayClient(
     }
 
     /**
+     * 发送媒体消息。
+     * picoclaw 服务端将 media.send 与 message.send 同等处理。
+     */
+    fun sendMedia(content: String, media: List<Map<String, Any?>>): String? {
+        val msgId = "msg-${UUID.randomUUID()}"
+        val payload = mutableMapOf<String, Any?>(
+            "content" to content,
+            "media" to media
+        )
+        val message = PicoMessage(
+            type = PicoMessageType.MEDIA_SEND,
+            id = msgId,
+            payload = payload
+        )
+        return if (send(message)) msgId else null
+    }
+
+    /**
      * 发送 typing.start 指示。
      */
     fun sendTypingStart(sessionId: String) {

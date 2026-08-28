@@ -265,6 +265,7 @@ class PicoRepository {
 
         if (messageId == null) {
             // 无 message_id 的直接追加到最后一条
+            Log.w(TAG, "message.update 缺少 message_id，追加到最后一条消息: content=${content.take(50)}")
             val list = _chatMessages.value
             if (list.isNotEmpty() && list.last().role == "assistant") {
                 val last = list.last()
