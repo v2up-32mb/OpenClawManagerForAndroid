@@ -2,6 +2,7 @@ package com.picoclaw.manager.data.repository
 
 import android.util.Log
 import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import com.picoclaw.manager.data.pico.ChatMessage
 import com.picoclaw.manager.data.pico.PicoConnectionState
 import com.picoclaw.manager.data.pico.PicoGatewayClient
@@ -363,7 +364,7 @@ class PicoRepository(
             is List<*> -> attachments
             is String -> {
                 try {
-                    gson.fromJson(attachments, Array<Map<String, Any?>>::class.java)?.toList()
+                    gson.fromJson(attachments, object : TypeToken<Array<Map<String, Any?>>>() {}.type)?.toList()
                 } catch (_: Exception) { null }
             }
             else -> null
