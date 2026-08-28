@@ -44,7 +44,7 @@ object FaqContent {
         """.trimIndent(),
         "如何管理模型？" to """
             picoclaw 的模型配置通过 Web UI 的 REST API 管理：
-            • GET/POST/PUT/DELETE /api/models/*
+            • GET/POST/PUT/DELETE /api/models/...
             在「模型配置」Tab 中可选择默认模型并保存。
             
             API Key 需要在 picoclaw 的 Dashboard Web 界面或配置文件中设置。
