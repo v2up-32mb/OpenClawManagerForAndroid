@@ -364,7 +364,8 @@ class PicoRepository(
             is List<*> -> attachments
             is String -> {
                 try {
-                    gson.fromJson<List<Map<String, Any?>>>(attachments, object : TypeToken<List<Map<String, Any?>>>() {}.type) ?: null
+                    val type = object : TypeToken<List<Map<String, Any?>>>() {}.type
+                    gson.fromJson<List<Map<String, Any?>>>(attachments, type)
                 } catch (_: Exception) { null }
             }
             else -> null
