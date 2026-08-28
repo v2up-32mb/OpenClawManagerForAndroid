@@ -43,6 +43,7 @@ fun ChatScreen(
     val chatMessages by viewModel.chatMessages.collectAsState()
     val chatSendError by viewModel.chatSendError.collectAsState()
     val agentRunInProgress by viewModel.agentRunInProgress.collectAsState()
+    val aiTyping by viewModel.aiTyping.collectAsState()
     var inputText by remember { mutableStateOf("") }
     val scrollState = rememberScrollState()
 
@@ -103,6 +104,20 @@ fun ChatScreen(
                     }
                     displayList.forEach { msg ->
                         ChatBubble(message = msg)
+                    }
+                    if (aiTyping) {
+                        // AI 正在输入指示器（typing.start 事件驱动）
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                            Text(
+                                text = "AI 正在输入…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }

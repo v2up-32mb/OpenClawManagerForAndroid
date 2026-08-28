@@ -90,6 +90,11 @@ class MainViewModel(
         _activeRepo.flatMapLatest { it.agentRunInProgress }
             .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    /** AI 正在输入指示（typing.start/typing.stop 事件）。 */
+    val aiTyping: StateFlow<Boolean> =
+        _activeRepo.flatMapLatest { it.aiTyping }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
     // ==================== Toast 提示 ====================
 
     private val _saveSuccessToast = MutableStateFlow<String?>(null)

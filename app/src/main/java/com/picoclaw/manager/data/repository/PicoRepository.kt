@@ -98,6 +98,10 @@ class PicoRepository {
     private val _agentRunInProgress = MutableStateFlow(false)
     val agentRunInProgress: StateFlow<Boolean> = _agentRunInProgress.asStateFlow()
 
+    /** AI 正在输入（typing.start/typing.stop 事件驱动）。 */
+    private val _aiTyping = MutableStateFlow(false)
+    val aiTyping: StateFlow<Boolean> = _aiTyping.asStateFlow()
+
     private var agentRunTimeoutJob: Job? = null
 
     /** 上一轮回复的最后一条 message_id，用于判断流式更新结束状态。 */
@@ -188,9 +192,11 @@ class PicoRepository {
             }
             PicoMessageType.TYPING_START -> {
                 // AI 开始回复
+                _aiTyping.value = true
             }
             PicoMessageType.TYPING_STOP -> {
                 // AI 回复结束
+                _aiTyping.value = false
             }
             PicoMessageType.ERROR -> {
                 val errMsg = payload["message"]?.toString() ?: "服务器错误"
@@ -492,6 +498,7 @@ class PicoRepository {
         agentRunTimeoutJob?.cancel()
         agentRunTimeoutJob = null
         _agentRunInProgress.value = false
+        _aiTyping.value = false
     }
 
     /**
