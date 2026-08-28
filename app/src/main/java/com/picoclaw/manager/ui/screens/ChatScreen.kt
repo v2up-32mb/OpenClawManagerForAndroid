@@ -29,7 +29,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import org.json.JSONArray
+import org.json.JSONObject
 import com.picoclaw.manager.data.pico.ChatMessage
 import com.picoclaw.manager.data.pico.PicoConnectionState
 import com.picoclaw.manager.ui.MainViewModel
@@ -222,7 +225,9 @@ private fun ChatBubble(message: ChatMessage) {
             Spacer(Modifier.height(4.dp))
 
             // 内容
-            if (message.content.isNotBlank()) {
+            if (isToolCall) {
+                ToolCallContent(content = message.content)
+            } else if (message.content.isNotBlank()) {
                 Text(
                     text = message.content,
                     style = MaterialTheme.typography.bodyMedium,
@@ -238,6 +243,100 @@ private fun ChatBubble(message: ChatMessage) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary
                 )
+            }
+        }
+    }
+}
+
+/** 单个工具调用的解析结果 */
+private data class ParsedToolCall(
+    val name: String,
+    val arguments: String,
+    val feedbackExplanation: String?
+)
+
+/** 把 tool_calls 消息的 content（JSON 数组字符串）解析为工具调用列表；解析失败返回 null */
+private fun parseToolCalls(content: String): List<ParsedToolCall>? {
+    val trimmed = content.trim()
+    if (!trimmed.startsWith("[")) return null
+    return try {
+        val array = JSONArray(trimmed)
+        (0 until array.length()).map { i ->
+            val obj = array.optJSONObject(i) ?: return null
+            val func = obj.optJSONObject("function")
+            val name = func?.optString("name")?.takeIf { it.isNotBlank() }
+                ?: obj.optString("name", "未知工具")
+            val rawArgs = func?.optString("arguments", "").orEmpty()
+            val prettyArgs = try {
+                JSONObject(rawArgs).toString(2)
+            } catch (_: Exception) {
+                rawArgs
+            }
+            val feedback = obj.optJSONObject("extra_content")
+                ?.optString("tool_feedback_explanation")
+                ?.takeIf { it.isNotBlank() }
+            ParsedToolCall(name = name, arguments = prettyArgs, feedbackExplanation = feedback)
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+/** 工具调用消息的结构化展示；解析失败时回退为原始文本 */
+@Composable
+private fun ToolCallContent(content: String) {
+    val calls = parseToolCalls(content)
+    if (calls == null) {
+        if (content.isNotBlank()) {
+            Text(
+                text = content,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        calls.forEach { call ->
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    .padding(8.dp)
+            ) {
+                // 工具名徽标
+                Text(
+                    text = call.name,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier
+                        .background(
+                            color = MaterialTheme.colorScheme.primary,
+                            shape = RoundedCornerShape(4.dp)
+                        )
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+                // 参数（等宽字体）
+                if (call.arguments.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = call.arguments,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                // 工具反馈说明
+                call.feedbackExplanation?.let { feedback ->
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = feedback,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
